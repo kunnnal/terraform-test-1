@@ -2,11 +2,51 @@
 # VARIABLES
 # ==========================================
 
+# ------------------------------------------------------------------
+# AWS
+# ------------------------------------------------------------------
+
+variable "aws_region" {
+  description = "AWS region to deploy in (e.g. us-east-1, ap-south-1)"
+  type        = string
+  default     = "us-east-1"
+}
+
+variable "instance_type" {
+  description = "EC2 instance type (e.g. t3.medium, t3.large)"
+  type        = string
+  default     = "t3.medium"
+}
+
+# ------------------------------------------------------------------
+# VPC NETWORK
+# ------------------------------------------------------------------
+
+variable "vpc_cidr" {
+  description = "CIDR block for the custom VPC"
+  type        = string
+  default     = "10.0.0.0/16"
+}
+
+variable "subnet_cidr" {
+  description = "CIDR block for the public subnet"
+  type        = string
+  default     = "10.0.1.0/24"
+}
+
+# ------------------------------------------------------------------
+# APP USER
+# ------------------------------------------------------------------
+
 variable "app_user" {
-  description = "Linux username created on the EC2 instance to run the app (e.g. 'appuser', 'deploy', 'nexus')"
+  description = "Linux username created on the EC2 instance to run the app"
   type        = string
   default     = "appuser"
 }
+
+# ------------------------------------------------------------------
+# OS & JAVA
+# ------------------------------------------------------------------
 
 variable "os_choice" {
   description = "Choose 'ubuntu' or 'amazon_linux'"
@@ -30,6 +70,10 @@ variable "java_version" {
   }
 }
 
+# ------------------------------------------------------------------
+# POSTGRESQL
+# ------------------------------------------------------------------
+
 variable "db_name" {
   description = "The name of the PostgreSQL database"
   type        = string
@@ -49,11 +93,9 @@ variable "db_password" {
   sensitive   = true
 }
 
-variable "ssh_public_key_path" {
-  description = "Path to your local public SSH key file (e.g. ~/.ssh/id_ed25519.pub)"
-  type        = string
-  default     = "~/.ssh/id_ed25519.pub"
-}
+# ------------------------------------------------------------------
+# NEO4J
+# ------------------------------------------------------------------
 
 variable "neo4j_password" {
   description = "Initial password for the Neo4j default user ('neo4j')"
@@ -63,19 +105,19 @@ variable "neo4j_password" {
 }
 
 # ------------------------------------------------------------------
-# KAFKA CONTROLS
+# KAFKA
 # ------------------------------------------------------------------
 
 variable "install_kafka" {
-  description = "Download and install Apache Kafka? Enter true to install, false to skip."
+  description = "Download and install Apache Kafka? Enter true or false."
   type        = bool
-  # No default — Terraform will ask you at apply time
+  # No default - Terraform will ask at apply time
 }
 
 variable "kafka_mode" {
-  description = "Kafka mode to use: enter 'kraft' (modern, no Zookeeper) or 'zookeeper' (legacy). Only used when install_kafka = true."
+  description = "Kafka mode: enter 'kraft' (modern) or 'zookeeper' (legacy)"
   type        = string
-  # No default — Terraform will ask you at apply time
+  # No default - Terraform will ask at apply time
 
   validation {
     condition     = contains(["kraft", "zookeeper"], var.kafka_mode)
@@ -83,8 +125,12 @@ variable "kafka_mode" {
   }
 }
 
+# ------------------------------------------------------------------
+# PROCESS MANAGER
+# ------------------------------------------------------------------
+
 variable "process_manager" {
-  description = "Process manager to run the 6 app processes: 'systemd' (recommended, built-in) or 'supervisord' (single config file)."
+  description = "Process manager: 'systemd' (recommended) or 'supervisord'"
   type        = string
   default     = "systemd"
 
@@ -99,13 +145,13 @@ variable "process_manager" {
 # ----------------------------------------------------------------
 
 variable "enable_nginx" {
-  description = "Set to true to install Nginx as a reverse proxy in front of the FastAPI gateway (port 80 → 8000). Recommended for production."
+  description = "Install Nginx as reverse proxy (port 80 to 8000)"
   type        = bool
   default     = true
 }
 
 variable "domain_name" {
-  description = "Optional. Your domain name (e.g. api.example.com). If set, Certbot will automatically obtain a free Let's Encrypt TLS certificate. Leave empty to skip TLS (HTTP only)."
+  description = "Enter your domain name for TLS (e.g. api.example.com). Leave empty and press Enter to skip TLS."
   type        = string
-  default     = ""
+  # No default - Terraform will ask at apply time
 }
