@@ -134,6 +134,7 @@ resource "aws_instance" "nexus_server" {
 
   # Injecting variables into the bash template file
   user_data = templatefile("${path.module}/user-data.sh.tlp", {
+    app_user        = var.app_user
     os_choice       = var.os_choice
     java_version    = var.java_version
     db_name         = var.db_name

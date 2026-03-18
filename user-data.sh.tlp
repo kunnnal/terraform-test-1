@@ -10,6 +10,7 @@ KAFKA_MODE="${kafka_mode}"
 PROCESS_MANAGER="${process_manager}"  # "systemd" or "supervisord"
 ENABLE_NGINX="${enable_nginx}"     # "true" or "false"
 DOMAIN_NAME="${domain_name}"       # e.g. "api.example.com" or "" for no TLS
+APP_USER="${app_user}"             # user to create and run the app as
 
 KAFKA_VERSION="3.7.0"
 SCALA_VERSION="2.13"
@@ -19,9 +20,9 @@ KAFKA_URL="https://archive.apache.org/dist/kafka/$KAFKA_VERSION/$KAFKA_BIN.tgz"
 # ==========================================
 # 1. Setup Environment
 # ==========================================
-useradd -m -s /bin/bash kunal
-echo "kunal ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/kunal
-HOME_DIR="/home/kunal"
+useradd -m -s /bin/bash $APP_USER
+echo "$APP_USER ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/$APP_USER
+HOME_DIR="/home/$APP_USER"
 
 # ==========================================
 # 2. OS-Specific Installations (Java, Postgres, Neo4j)
@@ -94,12 +95,12 @@ if [ "$INSTALL_KAFKA" == "true" ]; then
     wget "$KAFKA_URL" -O /tmp/kafka.tgz
     tar -xzf /tmp/kafka.tgz -C /opt/
     mv /opt/$KAFKA_BIN /opt/kafka
-    chown -R kunal:kunal /opt/kafka
+    chown -R $APP_USER:$APP_USER /opt/kafka
 
     if [ "$KAFKA_MODE" == "kraft" ]; then
         echo "[INFO] Configuring Kafka in KRaft mode ..."
-        KAFKA_CLUSTER_ID=$(sudo -u kunal /opt/kafka/bin/kafka-storage.sh random-uuid)
-        sudo -u kunal /opt/kafka/bin/kafka-storage.sh format -t $KAFKA_CLUSTER_ID -c /opt/kafka/config/kraft/server.properties
+        KAFKA_CLUSTER_ID=$(sudo -u $APP_USER /opt/kafka/bin/kafka-storage.sh random-uuid)
+        sudo -u $APP_USER /opt/kafka/bin/kafka-storage.sh format -t $KAFKA_CLUSTER_ID -c /opt/kafka/config/kraft/server.properties
 
         cat <<EOF > /etc/systemd/system/kafka.service
 [Unit]
@@ -108,7 +109,7 @@ After=network.target
 
 [Service]
 Type=simple
-User=kunal
+User=$APP_USER
 ExecStart=/opt/kafka/bin/kafka-server-start.sh /opt/kafka/config/kraft/server.properties
 ExecStop=/opt/kafka/bin/kafka-server-stop.sh
 Restart=on-abnormal
@@ -131,10 +132,10 @@ EOF
 
         # Create Nexus topics
         echo "[INFO] Creating Kafka topics ..."
-        sudo -u kunal /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 \
+        sudo -u $APP_USER /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 \
             --create --topic ingestion.calendar \
             --partitions 1 --replication-factor 1 --if-not-exists
-        sudo -u kunal /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 \
+        sudo -u $APP_USER /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 \
             --create --topic ingestion.email \
             --partitions 1 --replication-factor 1 --if-not-exists
         echo "[INFO] Kafka topics created successfully."
@@ -150,7 +151,7 @@ After=network.target
 
 [Service]
 Type=simple
-User=kunal
+User=$APP_USER
 ExecStart=/opt/kafka/bin/zookeeper-server-start.sh /opt/kafka/config/zookeeper.properties
 ExecStop=/opt/kafka/bin/zookeeper-server-stop.sh
 Restart=on-abnormal
@@ -167,7 +168,7 @@ After=zookeeper.service
 
 [Service]
 Type=simple
-User=kunal
+User=$APP_USER
 ExecStart=/opt/kafka/bin/kafka-server-start.sh /opt/kafka/config/server.properties
 ExecStop=/opt/kafka/bin/kafka-server-stop.sh
 Restart=on-abnormal
@@ -190,10 +191,10 @@ EOF
 
         # Create Nexus topics
         echo "[INFO] Creating Kafka topics ..."
-        sudo -u kunal /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 \
+        sudo -u $APP_USER /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 \
             --create --topic ingestion.calendar \
             --partitions 1 --replication-factor 1 --if-not-exists
-        sudo -u kunal /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 \
+        sudo -u $APP_USER /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 \
             --create --topic ingestion.email \
             --partitions 1 --replication-factor 1 --if-not-exists
         echo "[INFO] Kafka topics created successfully."
@@ -223,7 +224,7 @@ if [ "$INSTALL_KAFKA" == "true" ]; then
 else
     echo "# NEXUS_KAFKA_BOOTSTRAP_SERVERS= (kafka not installed)" >> $ENV_FILE
 fi
-chown kunal:kunal $ENV_FILE
+chown $APP_USER:$APP_USER $ENV_FILE
 
 # ==========================================
 # 7. Python 3.11 Virtual Environment
@@ -231,16 +232,16 @@ chown kunal:kunal $ENV_FILE
 APP_DIR="$HOME_DIR/app"
 VENV_DIR="$HOME_DIR/venv"
 
-# Create the venv as kunal user
-sudo -u kunal python3.11 -m venv "$VENV_DIR"
+# Create the venv as $APP_USER user
+sudo -u $APP_USER python3.11 -m venv "$VENV_DIR"
 echo "[INFO] Python 3.11 venv created at $VENV_DIR"
 
 # Create app directory (your code will be deployed here)
-sudo -u kunal mkdir -p "$APP_DIR"
+sudo -u $APP_USER mkdir -p "$APP_DIR"
 
 # Placeholder: once your app code is in $APP_DIR, run:
-# sudo -u kunal $VENV_DIR/bin/pip install -e $APP_DIR
-# sudo -u kunal $VENV_DIR/bin/alembic -c $APP_DIR/alembic.ini upgrade head
+# sudo -u $APP_USER $VENV_DIR/bin/pip install -e $APP_DIR
+# sudo -u $APP_USER $VENV_DIR/bin/alembic -c $APP_DIR/alembic.ini upgrade head
 echo "[INFO] App directory ready at $APP_DIR"
 
 # ==========================================
@@ -265,7 +266,7 @@ Wants=network.target
 
 [Service]
 Type=simple
-User=kunal
+User=$APP_USER
 WorkingDirectory=$${APP_DIR}
 EnvironmentFile=$${HOME_DIR}/.env
 ExecStart=$${VENV_DIR}/bin/python $${CMD}
@@ -314,7 +315,7 @@ else
 [program:nexus-gateway]
 command=$VENV_DIR/bin/python -m uvicorn app.gateway:app --host 0.0.0.0 --port 8000
 directory=$APP_DIR
-user=kunal
+user=$APP_USER
 autostart=true
 autorestart=true
 stdout_logfile=/var/log/supervisor/nexus-gateway.log
@@ -324,7 +325,7 @@ environment=HOME="$HOME_DIR"
 [program:nexus-calendar-worker]
 command=$VENV_DIR/bin/python app/workers/calendar_worker.py
 directory=$APP_DIR
-user=kunal
+user=$APP_USER
 autostart=true
 autorestart=true
 stdout_logfile=/var/log/supervisor/nexus-calendar-worker.log
@@ -334,7 +335,7 @@ environment=HOME="$HOME_DIR"
 [program:nexus-calendar-consumer]
 command=$VENV_DIR/bin/python app/consumers/calendar_consumer.py
 directory=$APP_DIR
-user=kunal
+user=$APP_USER
 autostart=true
 autorestart=true
 stdout_logfile=/var/log/supervisor/nexus-calendar-consumer.log
@@ -344,7 +345,7 @@ environment=HOME="$HOME_DIR"
 [program:nexus-email-worker]
 command=$VENV_DIR/bin/python app/workers/email_worker.py
 directory=$APP_DIR
-user=kunal
+user=$APP_USER
 autostart=true
 autorestart=true
 stdout_logfile=/var/log/supervisor/nexus-email-worker.log
@@ -354,7 +355,7 @@ environment=HOME="$HOME_DIR"
 [program:nexus-email-consumer]
 command=$VENV_DIR/bin/python app/consumers/email_consumer.py
 directory=$APP_DIR
-user=kunal
+user=$APP_USER
 autostart=true
 autorestart=true
 stdout_logfile=/var/log/supervisor/nexus-email-consumer.log
@@ -364,7 +365,7 @@ environment=HOME="$HOME_DIR"
 [program:nexus-nudge-agent]
 command=$VENV_DIR/bin/python app/agents/nudge_agent.py
 directory=$APP_DIR
-user=kunal
+user=$APP_USER
 autostart=true
 autorestart=true
 stdout_logfile=/var/log/supervisor/nexus-nudge-agent.log

@@ -63,13 +63,13 @@ The script runs **once on first boot** and performs these steps in order:
 
 | Step | What happens |
 |------|-------------|
-| **1** | Creates the `kunal` Linux user with `sudo` access |
+| **1** | Creates the `appuser` Linux user with `sudo` access |
 | **2** | Installs Java, Python 3.11, PostgreSQL, Neo4j (OS-specific) |
 | **3** | Configures Neo4j to listen on `0.0.0.0` (all interfaces) and starts it |
 | **4** | Downloads and configures Apache Kafka (KRaft or Zookeeper mode), then creates the `ingestion.calendar` and `ingestion.email` topics |
 | **5** | Sets up the PostgreSQL database, user, and permissions |
-| **6** | Writes `/home/kunal/.env` with all connection strings |
-| **7** | Creates a Python 3.11 virtual environment at `/home/kunal/venv` |
+| **6** | Writes `/home/appuser/.env` with all connection strings |
+| **7** | Creates a Python 3.11 virtual environment at `/home/appuser/venv` |
 | **8** | Sets up the **process manager** (systemd units or supervisord config) for all 6 app processes |
 | **9** | Installs **Nginx** as a reverse proxy (port 80 → 8000), and optionally runs **Certbot** for free TLS |
 
@@ -284,25 +284,25 @@ sudo ss -tlnp | grep 9092
 
 ## 🐍 Python Application
 
-Your app directory: `/home/kunal/app`  
-Your venv: `/home/kunal/venv`
+Your app directory: `/home/appuser/app`  
+Your venv: `/home/appuser/venv`
 
 ### Deploy your app
 ```bash
 # SSH in and deploy code
-scp -i ~/.ssh/id_ed25519 -r ./your-app ubuntu@<public-ip>:/home/kunal/app
+scp -i ~/.ssh/id_ed25519 -r ./your-app ubuntu@<public-ip>:/home/appuser/app
 
 # Install dependencies
-sudo -u kunal /home/kunal/venv/bin/pip install -e /home/kunal/app
+sudo -u appuser /home/appuser/venv/bin/pip install -e /home/appuser/app
 
 # Run database migrations
-sudo -u kunal /home/kunal/venv/bin/alembic -c /home/kunal/app/alembic.ini upgrade head
+sudo -u appuser /home/appuser/venv/bin/alembic -c /home/appuser/app/alembic.ini upgrade head
 ```
 
 ### Environment variables
-All connection strings are pre-written to `/home/kunal/.env`:
+All connection strings are pre-written to `/home/appuser/.env`:
 ```bash
-cat /home/kunal/.env
+cat /home/appuser/.env
 ```
 ```
 NEXUS_DB_URL=postgresql://nexus_user:...@localhost:5432/nexus_app
@@ -342,7 +342,7 @@ sudo systemctl restart nexus-gateway
 ```
 
 > All 6 units are `enabled` — they **auto-start on reboot**.  
-> Each unit reads `/home/kunal/.env` automatically via `EnvironmentFile`.
+> Each unit reads `/home/appuser/.env` automatically via `EnvironmentFile`.
 
 ### supervisord (alternative)
 
@@ -438,7 +438,7 @@ sudo systemctl is-active neo4j postgresql kafka nginx && echo "INFRA UP ✅" || 
 sudo ss -tlnp | grep -E '80|443|5432|7474|7687|8000|9092'
 
 # .env contents
-cat /home/kunal/.env
+cat /home/appuser/.env
 
 # Cloud-init provisioning log
 sudo tail -100 /var/log/cloud-init-output.log | grep -E '\[INFO\]|ERROR|FAIL'

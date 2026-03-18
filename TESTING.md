@@ -104,7 +104,7 @@ psql -h 127.0.0.1 -U nexus_user -d nexus_app -c "SELECT current_user, current_da
 ```
 
 ❌ **If connection refused:** `sudo systemctl restart postgresql`  
-❌ **If auth failed:** Check password in `/home/kunal/.env`
+❌ **If auth failed:** Check password in `/home/appuser/.env`
 
 ---
 
@@ -214,7 +214,7 @@ echo '{"from":"test@example.com","subject":"test"}' | \
 ## 🔬 Step 6 — Test the .env File
 
 ```bash
-cat /home/kunal/.env
+cat /home/appuser/.env
 ```
 
 ✅ **Expected — all 5 keys should be present:**
@@ -232,20 +232,20 @@ NEXUS_KAFKA_BOOTSTRAP_SERVERS=localhost:9092
 
 ```bash
 # Check Python version
-/home/kunal/venv/bin/python --version
+/home/appuser/venv/bin/python --version
 ```
 
 ✅ **Expected:** `Python 3.11.x`
 
 ```bash
 # Quick connectivity test using the venv
-/home/kunal/venv/bin/python - <<'EOF'
+/home/appuser/venv/bin/python - <<'EOF'
 import sys, os
 print("Python:", sys.version)
 
 # Load .env manually
 env = {}
-with open("/home/kunal/.env") as f:
+with open("/home/appuser/.env") as f:
     for line in f:
         line = line.strip()
         if line and not line.startswith("#"):
@@ -322,7 +322,7 @@ nexus-nudge-agent.service         enabled
 ```
 
 > They are **enabled** (auto-start on reboot) but **not yet started** — that's correct.  
-> They'll start once you deploy your Python app to `/home/kunal/app/`.
+> They'll start once you deploy your Python app to `/home/appuser/app/`.
 
 ---
 
@@ -339,10 +339,10 @@ echo "=== KAFKA TOPICS ===" && \
 /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list && \
 echo "" && \
 echo "=== ENV FILE ===" && \
-sudo cat /home/kunal/.env && \
+sudo cat /home/appuser/.env && \
 echo "" && \
 echo "=== PYTHON VERSION ===" && \
-sudo /home/kunal/venv/bin/python --version && \
+sudo /home/appuser/venv/bin/python --version && \
 echo "" && \
 echo "✅ ALL CHECKS PASSED"
 ```
@@ -357,7 +357,7 @@ echo "✅ ALL CHECKS PASSED"
 |---|---|---|
 | Service not starting | `sudo journalctl -u SERVICE -n 50` | Check install logs |
 | Neo4j browser not loading | `sudo ss -tlnp \| grep 7474` | Must show `0.0.0.0`, not `127.0.0.1` |
-| Neo4j auth failed | `cat /home/kunal/.env` | Use password from `.env` |
+| Neo4j auth failed | `cat /home/appuser/.env` | Use password from `.env` |
 | Postgres permission denied | Use `sudo -i -u postgres psql` | Don't use `sudo -u postgres psql` |
 | Kafka port not open | `sudo systemctl status kafka` | Check KRaft config |
 | Nginx 502 Bad Gateway | Normal until FastAPI app is deployed | Deploy your app first |
