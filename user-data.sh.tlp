@@ -451,4 +451,8 @@ else
     echo "[INFO] enable_nginx=false — Nginx not installed. FastAPI runs on :8000 directly."
 fi
 
-echo "[INFO] User-data provisioning complete."
+echo "
+####################################################
+######################  ALL DONE ###################
+####################################################
+"
