@@ -10,7 +10,7 @@ A fully automated Terraform setup that provisions a single EC2 instance on AWS w
                         Internet
                            │
                     ┌──────▼──────┐
-                    │  AWS EC2    │  (t3.medium, Ubuntu 22.04 / Amazon Linux 2023)
+                    │  AWS EC2    │  (instance_type, Ubuntu 22.04 / Amazon Linux 2023)
                     │             │
                     │  ┌────────┐ │  :80 / :443
                     │  │ Nginx  │◄├───────────────── Browser / API Client
