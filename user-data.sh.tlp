@@ -429,7 +429,7 @@ NGINX
             dnf install -y certbot python3-certbot-nginx
         fi
 
-        # Obtain cert non-interactively
+        # Obtain cert non-interactively for this domain
         # NOTE: Your domain's DNS A-record must point to this EC2 public IP before this runs.
         certbot --nginx \
             --non-interactive \

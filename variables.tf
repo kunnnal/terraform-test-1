@@ -94,9 +94,9 @@ variable "process_manager" {
   }
 }
 
-# ------------------------------------------------------------------
+# ----------------------------------------------------------------
 # REVERSE PROXY & TLS
-# ------------------------------------------------------------------
+# ----------------------------------------------------------------
 
 variable "enable_nginx" {
   description = "Set to true to install Nginx as a reverse proxy in front of the FastAPI gateway (port 80 → 8000). Recommended for production."
