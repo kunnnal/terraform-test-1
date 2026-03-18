@@ -2,6 +2,12 @@
 # VARIABLES
 # ==========================================
 
+variable "app_user" {
+  description = "Linux username created on the EC2 instance to run the app (e.g. 'appuser', 'deploy', 'nexus')"
+  type        = string
+  default     = "appuser"
+}
+
 variable "os_choice" {
   description = "Choose 'ubuntu' or 'amazon_linux'"
   type        = string
