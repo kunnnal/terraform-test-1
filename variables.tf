@@ -58,7 +58,7 @@ variable "ssh_public_key_path" {
 variable "neo4j_password" {
   description = "Initial password for the Neo4j default user ('neo4j')"
   type        = string
-  default     = "neo4jpasswordsw"
+  default     = "neo4jpasswords"
   sensitive   = true
 }
 
