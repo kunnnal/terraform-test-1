@@ -1,0 +1,38 @@
+# ==========================================
+# Terraform — never commit these
+# ==========================================
+
+# Local .terraform directory (provider binaries, modules)
+.terraform/
+.terraform.lock.hcl
+
+# Terraform state files — contain sensitive data!
+terraform.tfstate
+terraform.tfstate.backup
+
+# Variable override files — may contain passwords
+terraform.tfvars
+*.auto.tfvars
+
+# Crash log files
+crash.log
+crash.*.log
+
+# ==========================================
+# SSH Keys — NEVER commit private keys!
+# ==========================================
+*.pem
+*.key
+id_rsa
+id_ed25519
+id_ed25519.pub
+
+# ==========================================
+# OS / Editor clutter
+# ==========================================
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*.swo

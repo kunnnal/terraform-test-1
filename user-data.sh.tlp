@@ -1,0 +1,453 @@
+#!/bin/bash
+OS_TYPE="${os_choice}"
+JAVA_VER="${java_version}"
+DB_NAME="${db_name}"
+DB_USER="${db_user}"
+DB_PASS="${db_password}"
+NEO4J_PASS="${neo4j_password}"
+INSTALL_KAFKA="${install_kafka}"   # "true" or "false"
+KAFKA_MODE="${kafka_mode}"
+PROCESS_MANAGER="${process_manager}"  # "systemd" or "supervisord"
+ENABLE_NGINX="${enable_nginx}"     # "true" or "false"
+DOMAIN_NAME="${domain_name}"       # e.g. "api.example.com" or "" for no TLS
+
+KAFKA_VERSION="3.7.0"
+SCALA_VERSION="2.13"
+KAFKA_BIN="kafka_$SCALA_VERSION-$KAFKA_VERSION"
+KAFKA_URL="https://archive.apache.org/dist/kafka/$KAFKA_VERSION/$KAFKA_BIN.tgz"
+
+# ==========================================
+# 1. Setup Environment
+# ==========================================
+useradd -m -s /bin/bash kunal
+echo "kunal ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/kunal
+HOME_DIR="/home/kunal"
+
+# ==========================================
+# 2. OS-Specific Installations (Java, Postgres, Neo4j)
+# ==========================================
+if [ "$OS_TYPE" == "ubuntu" ]; then
+    apt-get update -y
+    apt-get install -y openjdk-$JAVA_VER-jdk postgresql postgresql-contrib wget curl gnupg
+
+    # Python 3.11
+    apt-get install -y python3.11 python3.11-venv python3.11-dev python3-pip
+
+    # Neo4j repo & install
+    curl -fsSL https://debian.neo4j.com/neotechnology.gpg.key | gpg --dearmor -o /usr/share/keyrings/neo4j.gpg
+    echo "deb [signed-by=/usr/share/keyrings/neo4j.gpg] https://debian.neo4j.com stable latest" | tee -a /etc/apt/sources.list.d/neo4j.list
+    apt-get update -y
+    apt-get install -y neo4j
+else
+    dnf update -y
+    dnf install -y java-$JAVA_VER-amazon-corretto-devel postgresql15-server wget tar
+    postgresql-setup --initdb
+
+    # Python 3.11
+    dnf install -y python3.11 python3.11-pip python3.11-devel
+
+    # Neo4j repo & install
+    rpm --import https://debian.neo4j.com/neotechnology.gpg.key
+    cat <<EONEO4J > /etc/yum.repos.d/neo4j.repo
+[neo4j]
+name=Neo4j RPM Repository
+baseurl=https://yum.neo4j.com/stable/5
+enabled=1
+gpgcheck=1
+EONEO4J
+    dnf install -y neo4j
+fi
+
+# ==========================================
+# 3. Configure Neo4j to listen on ALL interfaces, then start
+# ==========================================
+# By default Neo4j only binds to localhost — external browser access
+# requires setting default_listen_address=0.0.0.0 BEFORE first start.
+NEO4J_CONF="/etc/neo4j/neo4j.conf"
+
+# Uncomment the directive if present, otherwise append it
+if grep -q "^#server.default_listen_address" "$NEO4J_CONF"; then
+    sed -i 's/#server.default_listen_address=0.0.0.0/server.default_listen_address=0.0.0.0/' "$NEO4J_CONF"
+elif ! grep -q "^server.default_listen_address" "$NEO4J_CONF"; then
+    echo "server.default_listen_address=0.0.0.0" >> "$NEO4J_CONF"
+fi
+
+# Ensure HTTP and Bolt connectors are explicitly enabled
+grep -q "^server.http.enabled" "$NEO4J_CONF" || echo "server.http.enabled=true"  >> "$NEO4J_CONF"
+grep -q "^server.bolt.enabled" "$NEO4J_CONF" || echo "server.bolt.enabled=true"  >> "$NEO4J_CONF"
+
+echo "[INFO] Neo4j configured to listen on 0.0.0.0:7474 (HTTP) and 0.0.0.0:7687 (Bolt)"
+
+# Set initial password BEFORE first start (Neo4j requirement)
+neo4j-admin dbms set-initial-password "$NEO4J_PASS"
+systemctl enable neo4j
+systemctl start neo4j
+
+systemctl enable postgresql
+systemctl start postgresql
+
+# ==========================================
+# 4. Kafka Installation (conditional)
+# ==========================================
+if [ "$INSTALL_KAFKA" == "true" ]; then
+    echo "[INFO] Kafka install requested. Downloading $KAFKA_BIN ..."
+    wget "$KAFKA_URL" -O /tmp/kafka.tgz
+    tar -xzf /tmp/kafka.tgz -C /opt/
+    mv /opt/$KAFKA_BIN /opt/kafka
+    chown -R kunal:kunal /opt/kafka
+
+    if [ "$KAFKA_MODE" == "kraft" ]; then
+        echo "[INFO] Configuring Kafka in KRaft mode ..."
+        KAFKA_CLUSTER_ID=$(sudo -u kunal /opt/kafka/bin/kafka-storage.sh random-uuid)
+        sudo -u kunal /opt/kafka/bin/kafka-storage.sh format -t $KAFKA_CLUSTER_ID -c /opt/kafka/config/kraft/server.properties
+
+        cat <<EOF > /etc/systemd/system/kafka.service
+[Unit]
+Description=Apache Kafka (KRaft Mode)
+After=network.target
+
+[Service]
+Type=simple
+User=kunal
+ExecStart=/opt/kafka/bin/kafka-server-start.sh /opt/kafka/config/kraft/server.properties
+ExecStop=/opt/kafka/bin/kafka-server-stop.sh
+Restart=on-abnormal
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+        systemctl daemon-reload
+        systemctl enable kafka
+        systemctl start kafka
+
+        # Wait for Kafka (KRaft) to be ready before creating topics
+        echo "[INFO] Waiting for Kafka (KRaft) to be ready on port 9092 ..."
+        for i in $(seq 1 30); do
+            /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list > /dev/null 2>&1 && break
+            echo "[INFO] Kafka not ready yet, retrying ($i/30) ..."
+            sleep 5
+        done
+
+        # Create Nexus topics
+        echo "[INFO] Creating Kafka topics ..."
+        sudo -u kunal /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 \
+            --create --topic ingestion.calendar \
+            --partitions 1 --replication-factor 1 --if-not-exists
+        sudo -u kunal /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 \
+            --create --topic ingestion.email \
+            --partitions 1 --replication-factor 1 --if-not-exists
+        echo "[INFO] Kafka topics created successfully."
+
+    else
+        echo "[INFO] Configuring Kafka in Zookeeper mode ..."
+
+        # Zookeeper service
+        cat <<EOF > /etc/systemd/system/zookeeper.service
+[Unit]
+Description=Apache Zookeeper
+After=network.target
+
+[Service]
+Type=simple
+User=kunal
+ExecStart=/opt/kafka/bin/zookeeper-server-start.sh /opt/kafka/config/zookeeper.properties
+ExecStop=/opt/kafka/bin/zookeeper-server-stop.sh
+Restart=on-abnormal
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+        # Kafka service (depends on Zookeeper)
+        cat <<EOF > /etc/systemd/system/kafka.service
+[Unit]
+Description=Apache Kafka (Zookeeper Mode)
+After=zookeeper.service
+
+[Service]
+Type=simple
+User=kunal
+ExecStart=/opt/kafka/bin/kafka-server-start.sh /opt/kafka/config/server.properties
+ExecStop=/opt/kafka/bin/kafka-server-stop.sh
+Restart=on-abnormal
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+        systemctl daemon-reload
+        systemctl enable zookeeper kafka
+        systemctl start zookeeper kafka
+
+        # Wait for Kafka (Zookeeper) to be ready before creating topics
+        echo "[INFO] Waiting for Kafka (Zookeeper) to be ready on port 9092 ..."
+        for i in $(seq 1 30); do
+            /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list > /dev/null 2>&1 && break
+            echo "[INFO] Kafka not ready yet, retrying ($i/30) ..."
+            sleep 5
+        done
+
+        # Create Nexus topics
+        echo "[INFO] Creating Kafka topics ..."
+        sudo -u kunal /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 \
+            --create --topic ingestion.calendar \
+            --partitions 1 --replication-factor 1 --if-not-exists
+        sudo -u kunal /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 \
+            --create --topic ingestion.email \
+            --partitions 1 --replication-factor 1 --if-not-exists
+        echo "[INFO] Kafka topics created successfully."
+    fi
+else
+    echo "[INFO] install_kafka=false — skipping Kafka download and setup."
+fi
+
+# ==========================================
+# 5. Configure PostgreSQL
+# ==========================================
+sleep 5
+sudo -u postgres psql -c "CREATE DATABASE $DB_NAME;"
+sudo -u postgres psql -c "CREATE USER $DB_USER WITH ENCRYPTED PASSWORD '$DB_PASS';"
+sudo -u postgres psql -c "GRANT ALL PRIVILEGES ON DATABASE $DB_NAME TO $DB_USER;"
+
+# ==========================================
+# 6. Create the .env file
+# ==========================================
+ENV_FILE="$HOME_DIR/.env"
+echo "NEXUS_DB_URL=postgresql://$DB_USER:$DB_PASS@localhost:5432/$DB_NAME" > $ENV_FILE
+echo "NEXUS_NEO4J_URL=bolt://localhost:7687"              >> $ENV_FILE
+echo "NEXUS_NEO4J_USER=neo4j"                            >> $ENV_FILE
+echo "NEXUS_NEO4J_PASSWORD=$NEO4J_PASS"                  >> $ENV_FILE
+if [ "$INSTALL_KAFKA" == "true" ]; then
+    echo "NEXUS_KAFKA_BOOTSTRAP_SERVERS=localhost:9092"   >> $ENV_FILE
+else
+    echo "# NEXUS_KAFKA_BOOTSTRAP_SERVERS= (kafka not installed)" >> $ENV_FILE
+fi
+chown kunal:kunal $ENV_FILE
+
+# ==========================================
+# 7. Python 3.11 Virtual Environment
+# ==========================================
+APP_DIR="$HOME_DIR/app"
+VENV_DIR="$HOME_DIR/venv"
+
+# Create the venv as kunal user
+sudo -u kunal python3.11 -m venv "$VENV_DIR"
+echo "[INFO] Python 3.11 venv created at $VENV_DIR"
+
+# Create app directory (your code will be deployed here)
+sudo -u kunal mkdir -p "$APP_DIR"
+
+# Placeholder: once your app code is in $APP_DIR, run:
+# sudo -u kunal $VENV_DIR/bin/pip install -e $APP_DIR
+# sudo -u kunal $VENV_DIR/bin/alembic -c $APP_DIR/alembic.ini upgrade head
+echo "[INFO] App directory ready at $APP_DIR"
+
+# ==========================================
+# 8. Process Manager Setup
+# ==========================================
+# 6 processes: gateway, calendar-worker, calendar-consumer,
+#              email-worker, email-consumer, nudge-agent
+
+if [ "$PROCESS_MANAGER" == "systemd" ]; then
+    echo "[INFO] Setting up systemd units for all 6 app processes ..."
+
+    # Helper function to write one systemd unit
+    write_unit() {
+        local NAME=$1
+        local DESC=$2
+        local CMD=$3
+        cat <<EOF > /etc/systemd/system/nexus-$${NAME}.service
+[Unit]
+Description=Nexus $${DESC}
+After=network.target postgresql.service neo4j.service
+Wants=network.target
+
+[Service]
+Type=simple
+User=kunal
+WorkingDirectory=$${APP_DIR}
+EnvironmentFile=$${HOME_DIR}/.env
+ExecStart=$${VENV_DIR}/bin/python $${CMD}
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    }
+
+    write_unit "gateway"           "FastAPI Gateway"       "-m uvicorn app.gateway:app --host 0.0.0.0 --port 8000"
+    write_unit "calendar-worker"   "Calendar Worker"       "app/workers/calendar_worker.py"
+    write_unit "calendar-consumer" "Calendar Consumer"     "app/consumers/calendar_consumer.py"
+    write_unit "email-worker"      "Email Worker"          "app/workers/email_worker.py"
+    write_unit "email-consumer"    "Email Consumer"        "app/consumers/email_consumer.py"
+    write_unit "nudge-agent"       "Nudge Agent"           "app/agents/nudge_agent.py"
+
+    systemctl daemon-reload
+    # Enable all 6 (they'll auto-start on reboot; start manually after deploying app)
+    systemctl enable \
+        nexus-gateway \
+        nexus-calendar-worker \
+        nexus-calendar-consumer \
+        nexus-email-worker \
+        nexus-email-consumer \
+        nexus-nudge-agent
+
+    echo "[INFO] systemd units created. Start them after deploying your app:"
+    echo "       sudo systemctl start nexus-gateway nexus-calendar-worker nexus-calendar-consumer nexus-email-worker nexus-email-consumer nexus-nudge-agent"
+
+else
+    echo "[INFO] Setting up supervisord for all 6 app processes ..."
+
+    # Install supervisord
+    if [ "$OS_TYPE" == "ubuntu" ]; then
+        apt-get install -y supervisor
+    else
+        dnf install -y supervisor
+    fi
+
+    # Write supervisord config
+    cat <<EOF > /etc/supervisor/conf.d/nexus.conf
+[program:nexus-gateway]
+command=$VENV_DIR/bin/python -m uvicorn app.gateway:app --host 0.0.0.0 --port 8000
+directory=$APP_DIR
+user=kunal
+autostart=true
+autorestart=true
+stdout_logfile=/var/log/supervisor/nexus-gateway.log
+stderr_logfile=/var/log/supervisor/nexus-gateway-err.log
+environment=HOME="$HOME_DIR"
+
+[program:nexus-calendar-worker]
+command=$VENV_DIR/bin/python app/workers/calendar_worker.py
+directory=$APP_DIR
+user=kunal
+autostart=true
+autorestart=true
+stdout_logfile=/var/log/supervisor/nexus-calendar-worker.log
+stderr_logfile=/var/log/supervisor/nexus-calendar-worker-err.log
+environment=HOME="$HOME_DIR"
+
+[program:nexus-calendar-consumer]
+command=$VENV_DIR/bin/python app/consumers/calendar_consumer.py
+directory=$APP_DIR
+user=kunal
+autostart=true
+autorestart=true
+stdout_logfile=/var/log/supervisor/nexus-calendar-consumer.log
+stderr_logfile=/var/log/supervisor/nexus-calendar-consumer-err.log
+environment=HOME="$HOME_DIR"
+
+[program:nexus-email-worker]
+command=$VENV_DIR/bin/python app/workers/email_worker.py
+directory=$APP_DIR
+user=kunal
+autostart=true
+autorestart=true
+stdout_logfile=/var/log/supervisor/nexus-email-worker.log
+stderr_logfile=/var/log/supervisor/nexus-email-worker-err.log
+environment=HOME="$HOME_DIR"
+
+[program:nexus-email-consumer]
+command=$VENV_DIR/bin/python app/consumers/email_consumer.py
+directory=$APP_DIR
+user=kunal
+autostart=true
+autorestart=true
+stdout_logfile=/var/log/supervisor/nexus-email-consumer.log
+stderr_logfile=/var/log/supervisor/nexus-email-consumer-err.log
+environment=HOME="$HOME_DIR"
+
+[program:nexus-nudge-agent]
+command=$VENV_DIR/bin/python app/agents/nudge_agent.py
+directory=$APP_DIR
+user=kunal
+autostart=true
+autorestart=true
+stdout_logfile=/var/log/supervisor/nexus-nudge-agent.log
+stderr_logfile=/var/log/supervisor/nexus-nudge-agent-err.log
+environment=HOME="$HOME_DIR"
+EOF
+
+    systemctl enable supervisor
+    systemctl start supervisor
+    echo "[INFO] supervisord configured. Check status: sudo supervisorctl status"
+fi
+
+# ==========================================
+# 9. Reverse Proxy: Nginx + optional Certbot TLS
+# ==========================================
+if [ "$ENABLE_NGINX" == "true" ]; then
+    echo "[INFO] Installing Nginx reverse proxy ..."
+
+    if [ "$OS_TYPE" == "ubuntu" ]; then
+        apt-get install -y nginx
+    else
+        dnf install -y nginx
+    fi
+
+    # Write Nginx server block — proxies port 80 → localhost:8000
+    cat <<NGINX > /etc/nginx/conf.d/nexus.conf
+server {
+    listen 80;
+    server_name ${domain_name != "" ? domain_name : "_"};
+
+    # Security headers
+    add_header X-Frame-Options "SAMEORIGIN";
+    add_header X-Content-Type-Options "nosniff";
+
+    location / {
+        proxy_pass         http://127.0.0.1:8000;
+        proxy_http_version 1.1;
+        proxy_set_header   Host              \$host;
+        proxy_set_header   X-Real-IP         \$remote_addr;
+        proxy_set_header   X-Forwarded-For   \$proxy_add_x_forwarded_for;
+        proxy_set_header   X-Forwarded-Proto \$scheme;
+        proxy_read_timeout 120s;
+    }
+}
+NGINX
+
+    # Remove default site if present
+    rm -f /etc/nginx/sites-enabled/default
+
+    systemctl enable nginx
+    systemctl start nginx
+    echo "[INFO] Nginx started — proxying http://0.0.0.0:80 → http://127.0.0.1:8000"
+
+    # ── Optional: Certbot TLS (only if a domain name is provided) ──
+    if [ -n "$DOMAIN_NAME" ]; then
+        echo "[INFO] domain_name=$DOMAIN_NAME — installing Certbot for Let's Encrypt TLS ..."
+
+        if [ "$OS_TYPE" == "ubuntu" ]; then
+            apt-get install -y certbot python3-certbot-nginx
+        else
+            dnf install -y certbot python3-certbot-nginx
+        fi
+
+        # Obtain cert non-interactively
+        # NOTE: Your domain's DNS A-record must point to this EC2 public IP before this runs.
+        certbot --nginx \
+            --non-interactive \
+            --agree-tos \
+            --email admin@$DOMAIN_NAME \
+            --domains $DOMAIN_NAME \
+            --redirect
+
+        # Auto-renew via cron
+        echo "0 3 * * * root certbot renew --quiet --post-hook 'systemctl reload nginx'" \
+            > /etc/cron.d/certbot-renew
+
+        echo "[INFO] TLS certificate obtained for $DOMAIN_NAME — HTTPS enabled."
+    else
+        echo "[INFO] No domain_name set — skipping Certbot. Site is HTTP only."
+        echo "       To add TLS later: set domain_name variable and re-apply, or run certbot manually."
+    fi
+else
+    echo "[INFO] enable_nginx=false — Nginx not installed. FastAPI runs on :8000 directly."
+fi
+
+echo "[INFO] User-data provisioning complete."
